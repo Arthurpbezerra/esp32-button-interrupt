@@ -1,96 +1,69 @@
-#include <Arduino.h>
+#include <Arduino.h>               // base Arduino: setup/loop, millis, pinMode...
+#include "app/pins.h"              // PIN_LED, PIN_BUTTON, DEBOUNCE_MS
+#include "button/button.h"         // Button, ButtonEvent, buttonInit, buttonUpdate
 
+// Regra elétrica do LED.
+// true  = LED liga com HIGH (ativo alto)
+// false = LED liga com LOW  (ativo baixo)
+static constexpr bool LED_ACTIVE_HIGH = true;
 
-// static
-static constexpr uint8_t PIN_LED = 2;
-static constexpr uint8_t PIN_BUTTON = 4;
-static constexpr bool BUTTON_ACTIVE_LOW = false;
-static constexpr bool LED_ACTIVE_HIGH = true; // o led liga se for HIGH, caso for false entao o led liga se entrada for LOW
-static constexpr uint32_t DEBOUNCE_MS = 100;
+// Estado do LED em nível lógico (intenção), não em nível elétrico.
+static bool ledOn = false;
 
-static bool ledState = false;        // Estado atual do LED     
+// Instância do botão (guarda estado interno do debounce/FSM)
+static Button btn;
 
+// Função pequena para escrever no pino considerando LED ativo alto/baixo.
+static void writeLed(bool on) {
+  // Se LED é ativo alto: on -> HIGH, off -> LOW
+  // Se LED é ativo baixo: on -> LOW,  off -> HIGH
+  const uint8_t level = LED_ACTIVE_HIGH
+    ? (on ? HIGH : LOW)
+    : (on ? LOW  : HIGH);
 
-// functions
-static inline bool readButtonPressed();
-static void writeLed(bool on); // digitalWrite mas considera
-
+  digitalWrite(PIN_LED, level);
+}
 
 void setup() {
+  // Configura o pino do LED como saída.
   pinMode(PIN_LED, OUTPUT);
+
+  // Configura o pino do botão.
+  // Se você usa pulldown externo (seu caso no Wokwi anterior), fica INPUT.
+  // Se você for usar pull-up interno com botão no GND, seria INPUT_PULLUP.
   pinMode(PIN_BUTTON, INPUT);
-  Serial.begin(115200);     // Inicializa serial para prints
-  writeLed(false);  // Inicializa LED
+
+  // Abre UART para logs.
+  Serial.begin(115200);
+
+  // Estado inicial determinístico.
+  ledOn = false;
+  writeLed(ledOn);
+
+  // Inicializa o módulo do botão (captura estado inicial e tempos).
+  buttonInit(btn);
 }
 
 void loop() {
-  bool isPressed = readButtonPressed();
-  static bool handledPress = false;
-  unsigned long currentTime = millis();
-  static unsigned long lastDebounceTime = 0;
+  // Pega tempo uma vez por ciclo (boa prática).
+  const uint32_t now = millis();
 
-  // Detecta mudança (debounce)
-  static bool lastReading = false;
+  // Atualiza máquina de estados do botão e recebe evento, se houver.
+  const ButtonEvent ev = buttonUpdate(btn, now);
 
-  if (isPressed != lastReading) {
-    lastDebounceTime = currentTime;
+  // Para "toggle" profissional, escolha uma borda:
+  // - Pressed: alterna quando pressiona (recomendado).
+  // - Released: alterna quando solta (menos comum).
+  if (ev == ButtonEvent::Pressed) {
+    ledOn = !ledOn;                // alterna estado lógico
+    writeLed(ledOn);               // aplica ao hardware
+
+    // Log com timestamp e estado.
+    Serial.printf("[%lu] Pressed -> LED: %s\r\n",
+                  (unsigned long)now,
+                  ledOn ? "ON" : "OFF");
   }
 
-  if ((currentTime - lastDebounceTime) > DEBOUNCE_MS) {
-
-    // Só executa UMA vez enquanto estiver pressionado
-    if (isPressed && !handledPress) {
-      ledState = !ledState;
-      writeLed(ledState);
-      Serial.printf("[%lu] Pressed! LED: %s\n",currentTime,ledState ? "ON" : "OFF");
-      handledPress = true;
-      
-    }
-
-    // Quando solta o botão, libera para próximo clique
-    if (!isPressed) {
-      handledPress = false;
-    }
-  }
-
-  lastReading = isPressed;
+  // Se você quiser logar soltura também (sem alterar LED), pode:
+  // if (ev == ButtonEvent::Released) { Serial.printf(...); }
 }
-
-
-
-
-static inline bool readButtonPressed(){
-  bool raw = digitalRead(PIN_BUTTON);
-  return BUTTON_ACTIVE_LOW ? (raw == LOW): (raw == HIGH);
-}
-
-static void writeLed(bool on) {
-  if (LED_ACTIVE_HIGH) {
-    digitalWrite(PIN_LED, on ? HIGH : LOW);
-  } else {
-    digitalWrite(PIN_LED, on ? LOW : HIGH);
-  }
-}
-/*
-
-Tabela-verdade (exemplos)
-Vamos testar 4 cenários:
-
-Caso 1: LED_ACTIVE_HIGH = true e on = true
-cai no primeiro ramo: (on ? HIGH : LOW) = HIGH
-Resultado: digitalWrite(PIN_LED, HIGH) (liga)
-
-Caso 2: LED_ACTIVE_HIGH = true e on = false
-(on ? HIGH : LOW) = LOW
-Resultado: digitalWrite(PIN_LED, LOW) (desliga)
-
-Caso 3: LED_ACTIVE_HIGH = false e on = true
-cai no segundo ramo: (on ? LOW : HIGH) = LOW
-Resultado: digitalWrite(PIN_LED, LOW) (liga, porque é ativo em LOW)
-
-Caso 4: LED_ACTIVE_HIGH = false e on = false
-(on ? LOW : HIGH) = HIGH
-Resultado: digitalWrite(PIN_LED, HIGH) (desliga)
-
-
-*/
